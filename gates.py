@@ -152,21 +152,13 @@ def rccopy(x: QuantumRegister, result: QuantumRegister):
 #     return qc.to_gate(label="ACRC")
 
 
-def rot(x: QuantumRegister, anc: AncillaRegister, m: int = 0):
-    """Cyclically rotates the input register of m positions, with m power of 2,
+def rot(x: QuantumRegister, anc: AncillaRegister, k: int = 1):
+    """Cyclically rotates the input register of k positions, with k power of 2,
     only using swap operations, each controlled by an ancillae qubit leveraged to achieve parallelism.
-    """
-
-    """Rotates the input register of a number of position represented by register `k` reversed,
-    composing multiple cyclic rotation gates each controlled by one of the qubits in `k`
-    (i-th gate is controlled by i-th qubit of `k`, assuming it was already reversed).
-
-    Each cyclic rotation gate rotates `x` of `2^i` positions (where `i` depends on the index of the controlling bit in `k`)
-    only using swap operation, each controlled by an ancillae qubit leveraged to achieve parallelism.
 
     Args:
         - `x` Register to rotate
-        - `m` Number of positions to rotate
+        - `k` Number of positions to rotate
         - `anc` Register of ancillae qubits
 
     Raises:
@@ -176,7 +168,7 @@ def rot(x: QuantumRegister, anc: AncillaRegister, m: int = 0):
         - volume: `nlog2^3(n)/2` i.e. `O(nlog2^3(n))`
         - depth: `Θ(log2^3(n))`
     """
-    if not log2(m).is_integer():
+    if 2 ** (log2(k).astype(int)) != k:
         raise NotImplementedError(
             "Cyclic rotation is implemented for powers of two only"
         )
@@ -185,11 +177,13 @@ def rot(x: QuantumRegister, anc: AncillaRegister, m: int = 0):
             "Ancillae register must be half the size of the input register x"
         )
 
-    qc = QuantumCircuit(x, anc)
-    for i in range(1, ceil(log2(x.size)).astype(int) - m + 1):
-        for j in range(int(x.size / (2**i * m))):
-            for idx, q in enumerate(range(j * m * 2**i, m * (j * 2**i + 1))):
-                qc.cswap(anc[idx], x[q], x[q + m * 2 ** (i - 1)])
+    qc = QuantumCircuit(anc, x)
+    next_anc = 0
+    for i in range(1, ceil(log2(x.size)).astype(int) - ceil(log2(k)).astype(int) + 1):
+        for j in range(int(x.size / (2**i * k))):
+            for q in range(j * k * 2**i, k * (j * 2**i + 1)):
+                qc.cswap(anc[next_anc % anc.size], x[q], x[q + (2 ** (i - 1)) * k])
+                next_anc += 1
 
-    qc.draw(filename=f"rot{m}", output="mpl")
-    return qc.to_gate(label=f"ROT{m}")
+    qc.draw(filename=f"rot{k}", output="mpl")
+    return qc.to_gate(label=f"ROT{k}")

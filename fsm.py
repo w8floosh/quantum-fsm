@@ -1,4 +1,4 @@
-from qiskit.circuit import (
+from qiskit.circuit.quantumcircuit import (
     ClassicalRegister,
     QuantumCircuit,
     QuantumRegister,
@@ -6,7 +6,7 @@ from qiskit.circuit import (
     Qubit,
 )
 from typing import Dict, List
-from numpy import ceil, floor, log2, rint, array
+from numpy import floor, log2
 from .entities import FSMGate, FSMGateControl, FSMMode
 from .gates import (
     bitwise_cand,
@@ -24,8 +24,8 @@ class FSM:
         """Initializes a fixed substring matching algorithm.
 
         Args:
-            x, y (str): Non-empty input strings in binary format, equally sized.
-            d (int): Fixed length of the common substring(s) to search.
+            `x`, `y` (str): Non-empty input strings in binary format, equally sized.
+            `d` (int): Fixed length of the common substring(s) to search.
         """
         if not x or not y:
             raise ValueError("Input strings cannot be empty")
@@ -40,13 +40,14 @@ class FSM:
             raise TypeError("Input strings are not in binary format")
 
         self._mode = mode
-        if self._mode is FSMMode.FFP:
+        if self._mode == FSMMode.FFP.value:
             _pos = kwargs.get("starting_pos", None)
             if not _pos:
                 raise ValueError(
                     "Starting position is requested when initializing the FFP problem. Please specify the starting position using the keyword argument starting_pos"
                 )
             self._j = _pos
+            print(_pos)
         else:
             self._j = None
         self._d = d
@@ -94,6 +95,7 @@ class FSM:
 
     @property
     def input(self):
+        """FSM algorithm inputs"""
         return {
             "x": self._x,
             "y": self._y,
@@ -104,6 +106,7 @@ class FSM:
 
     @property
     def regs(self) -> Dict[str, QuantumRegister | List[QuantumRegister]]:
+        """FSM algorithm quantum registers"""
         return {
             "x": self._rx,
             "y": self._ry,
@@ -117,6 +120,7 @@ class FSM:
 
     @property
     def cregs(self) -> Dict[str, ClassicalRegister]:
+        """FSM algorithm classical registers"""
         return {"found": self._cout_outcome, "begins": self._cout_pos}
 
     def instantiate(self):
@@ -153,14 +157,14 @@ class _FSMInstance:
             if bit == "1":
                 self._qc.x(_regy[i])
 
-        if self.mode is FSMMode.FPM:
+        if self.mode == FSMMode.FPM.value:
             _ddinit = "".join(["1", "0" * self.n])
-        elif self.mode is FSMMode.FFP:
+        elif self.mode == FSMMode.FFP.value:
             _ddinit = "".join(
                 ["0" * self.from_pos, "1", "0" * (self.n - self.from_pos)]
             )
         else:
-            _ddinit = "1" * self.n
+            _ddinit = "1" * (self.n + 1)
         for i, bit in enumerate(_ddinit):
             if bit == "1":
                 self._qc.x(self.ddinit[i])
@@ -168,20 +172,28 @@ class _FSMInstance:
 
     @property
     def ready(self) -> bool:
+        """Returns True if the circuit is ready to be executed)"""
         return self._ready
 
     @property
     def measured(self) -> bool:
+        """Returns True if the circuit output was already measured"""
         return self._measured
 
     @property
     def mode(self) -> FSMMode:
+        """Circuit mode (used algorithm)"""
         return self._fsm.input["mode"]
 
     @property
     def from_pos(self) -> int:
+        """Position index from which to search for common substrings.
+
+        Raises:
+            - `KeyError` if circuit mode is not FFP"""
         if not self._fsm.input["from_pos"]:
             raise KeyError("FSM instance is not in FFP mode")
+        return self._fsm.input["from_pos"]
 
     @property
     def xy(self) -> tuple[QuantumRegister]:
@@ -240,7 +252,11 @@ class _FSMInstance:
 
     @property
     def result(self) -> tuple[ClassicalRegister]:
-        """Measurement results: algorithm outcome (match was found or not) and start position of the common substring"""
+        """Measurement results.
+
+        Returns:
+            - `found`: algorithm outcome (match was found or not)
+            - `begins`: start position of the common substring"""
         if not self.measured:
             raise RuntimeError(
                 "The output qubits were not measured yet. Please execute the algorithm before looking for results."
@@ -287,7 +303,7 @@ class _FSMInstance:
             ROT = FSMGate(
                 rot,
                 [
-                    _ddall[i + 1],
+                    QuantumRegister(name=f"D{i}", bits=_ddall[i + 1][1:]),
                     AncillaRegister(
                         name="anc_rot",
                         bits=self.ancillae[
@@ -296,7 +312,7 @@ class _FSMInstance:
                     ),
                 ],
                 [ctrl],
-                {"m": 2**i},
+                {"k": 2**i},
             )
             CRC = FSMGate(
                 rccopy,
@@ -307,8 +323,8 @@ class _FSMInstance:
         print(f"  Applying disjunction to D{len(self.ddi)-1}...")
         OR = FSMGate(unary_or, [self.ddi[len(self.ddi) - 1], self.out])
         self.apply(OR)
-        self._qc.draw(filename="FSM", output="mpl")
-        print("Circuit building successful.")
+        self._qc.draw(filename="FSM", fold=-1, output="mpl", initial_state=True)
+        print(f"Circuit building successful. Qubits: {len(self._qc.qubits)}")
         self._ready = True
         return self
 
@@ -343,7 +359,7 @@ class _FSMInstance:
     def revert(self):
         self._qc = QuantumCircuit(list(self._fsm.regs.values()))
 
-    def execute(self, iterations=1):
+    def execute(self, token: str, iterations=1):
         if not self.ready:
             raise RuntimeError(
                 "The circuit was not initialized yet. Use instance.build() before executing to initialize the algorithm circuit"
@@ -351,10 +367,25 @@ class _FSMInstance:
         self._qc.measure(self.out, self._fsm.cregs["found"])
         self._qc.measure(self.ddi[len(self.ddi) - 1], self._fsm.cregs["begins"])
 
-        from qiskit.primitives import Sampler
+        from qiskit_ibm_runtime import QiskitRuntimeService, Sampler, Options
 
-        sampler = Sampler()
+        print("token:", token)
+        QiskitRuntimeService.save_account(
+            channel="ibm_quantum",
+            instance="ibm-q/open/main",
+            token="148653106263ee232f0b7d905569ab477aa935e3bf0e178547dbcecc5df67e60d00d61bad9207789c66c8a0c7df5ab906429dec717f3541bb04f2d27c544ab97",
+            overwrite=True,
+            # token=token,
+        )
+        service = QiskitRuntimeService()
+        backend = service.backend("ibm_kyoto")
 
-        job = sampler.run(self._qc, shots=iterations)
+        # options = Options()
+        # options.resilience_level = 1
+        # options.optimization_level = 2
+
+        job = Sampler(backend).run(self._qc, shots=iterations)
+        # print(f"Running job {job.job_id()} on IBM Quantum Platform...")
         result = job.result()
         print(result.quasi_dists[0].binary_probabilities())
+        self._measured = True
