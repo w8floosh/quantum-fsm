@@ -1,135 +1,26 @@
-# from math import ceil, log
-# from typing import List
-# import numpy as np
-# from .tools import (
-#     calc_bitvec_cell,
-#     add_padding,
-#     bin_prefix_sum,
-#     get_positive_idxs,
-#     calc_bitvectors,
-#     get_reverse_bitstr,
-# )
-
-
-# class FSM:
-#     def __init__(self, d: int):
-#         """Initializes a fixed substring matching algorithm.
-
-#         Args:
-#             d (int): length of the common substring to search
-#         """
-#         self._d = d
-#         self._n = 0
-#         self._x = None
-#         self._y = None
-
-#     @property
-#     def xy(self):
-#         """input strings"""
-#         if not self._x or not self._y:
-#             return None
-#         return self._x, self._y
-
-#     @xy.setter
-#     def xy(self, x: str, y: str):
-#         if not x or not y:
-#             raise ValueError("Input strings cannot be empty")
-#         if not len(x) == len(y):
-#             raise ValueError("Input strings lengths do not match")
-#         self._x = add_padding(x, "$")
-#         self._y = add_padding(y, "%")
-
-#     @property
-#     def d(self):
-#         """length of the common substring to search"""
-#         return self._d
-
-#     @property
-#     def rd(self):
-#         """reversed bitstring representation of d"""
-#         return get_reverse_bitstr(self.d)
-
-#     @property
-#     def nd(self):
-#         """number of bits needed to represent d"""
-#         return ceil(log(self.d))
-
-#     @property
-#     def n(self):
-#         """number of bits needed to represent either x or y"""
-#         return ceil(log(self.xy[0]))
-
-#     @property
-#     def bitvecs(self):
-#         return self._bitvecs
-
-#     @bitvecs.setter
-#     def bitvecs(self):
-#         if not self.xy:
-#             raise KeyError("Input strings not set")
-#         self._bitvecs = np.array(
-#             [
-#                 [calc_bitvec_cell(*self.xy, i, j) for j in range(self.n)]
-#                 for i in range(self.nd + 1)
-#             ],
-#             dtype=int,
-#         )
-
-#     @property
-#     def neg_dvec(self):
-#         """D**-1 vector representation"""
-#         if not self.n:
-#             return np.array([])
-#         return np.ones(self.n)
-
-#     def dvec(self, order: int):
-#         if order < 0:
-#             return self.neg_dvec
-#         if 2**order > self.n:
-#             return np.zeros(self.n)
-
-#         dvec = self.neg_dvec
-#         for i in range(order + 1):
-#             dvec = np.roll(np.logical_and(dvec, self.bitvecs[i]), 2**i)
-#             dvec[: 2**i] = 0
-
-#         return dvec
-
-#     def match(self, x: str, y: str):
-#         self.x = x, self.y = y
-#         self.bitvecs = calc_bitvectors(x, y)
-#         matches = []
-#         for j in range(len(x)):
-#             if all(
-#                 self.bitvecs[i][j + bin_prefix_sum(self.rd, i - 1)]
-#                 for i in get_positive_idxs(self.rd)
-#             ):
-#                 matches.append(j)
-#         return matches
-
-
-from math import ceil, log
-from qiskit import QuantumCircuit, QuantumRegister, AncillaRegister
-from typing import List
-import numpy as np
-
-from tools import add_padding
+from qiskit.circuit import (
+    ClassicalRegister,
+    QuantumCircuit,
+    QuantumRegister,
+    AncillaRegister,
+    Qubit,
+)
+from typing import Dict, List
+from numpy import ceil, floor, log2, rint, array
+from .entities import FSMGate, FSMGateControl, FSMMode
 from .gates import (
-    arccopy,
     bitwise_cand,
     extend,
-    fanout,
     match,
     unary_or,
     rccopy,
     reverse,
-    roll2m,
     rot,
 )
 
 
 class FSM:
-    def __init__(self, x: str, y: str, d: int):
+    def __init__(self, x: str, y: str, d: int, mode: FSMMode, **kwargs):
         """Initializes a fixed substring matching algorithm.
 
         Args:
@@ -142,144 +33,328 @@ class FSM:
             raise ValueError("Input strings lengths do not match")
         if d < 2:
             raise ValueError("Substring length must be at least 2")
-        if not np.can_cast(f"0b{x}", int) or not np.can_cast(f"0b{y}", int):
+        try:
+            int(f"0b{x}", base=0)
+            int(f"0b{y}", base=0)
+        except:
             raise TypeError("Input strings are not in binary format")
 
+        self._mode = mode
+        if self._mode is FSMMode.FFP:
+            _pos = kwargs.get("starting_pos", None)
+            if not _pos:
+                raise ValueError(
+                    "Starting position is requested when initializing the FFP problem. Please specify the starting position using the keyword argument starting_pos"
+                )
+            self._j = _pos
+        else:
+            self._j = None
         self._d = d
-        self._rd = QuantumRegister((bin(d))[2:], name="d")
         self._n = len(x)
+        self._logn = floor(log2(self._n)).astype(int)
+        self._nd = floor(log2(self._d)).astype(int) + 1
+
+        print("  Creating input registries...")
+        self._rd = QuantumRegister(self._nd, "d")
 
         self._x = x
         self._y = y
-        # register of the binary representation of d
         # input registers
-        self._rx = QuantumRegister(self._x, name="X")
-        self._ry = QuantumRegister(self._y, name="Y")
+
+        self._rx = QuantumRegister(self._n, "X")
+        self._ry = QuantumRegister(self._n, "Y")
+        print(f"    - d: {self._nd} qubits")
+        print(f"    - x: {self._n} qubits")
+        print(f"    - y: {self._n} qubits")
+
+        print(f"  Creating {self._logn+1} λ bitvectors registries...")
+
         # lambda registers
         self._rli: List[QuantumRegister] = [
-            QuantumRegister("0" * self._n, name=f"\lambda{i}")
-            for i in range(np.ceil(np.log2(self._n)))
+            QuantumRegister(self._n, f"\lambda{i}") for i in range(self._logn + 1)
         ]
+
+        print(f"  Creating {self._logn+2} D bitvectors registries...")
+
         # D registers
-        self._rddneg = QuantumRegister("1" * self._n, name="D-1")
+        self._rddinit = QuantumRegister(self._n + 1, "D-1")
         self._rddi: List[QuantumRegister] = [
-            QuantumRegister("1" * (self._n + 1), name=f"D-1"),
-            *[
-                QuantumRegister("0" * (self._n + 1), name=f"D{i}")
-                for i in range(np.ceil(np.log2(self._n)))
-            ],
+            QuantumRegister(self._n + 1, f"D{i}") for i in range(self._logn)
         ]
+
         # ancillae register
-        self._ranc = AncillaRegister("0" * self._rd.size, name="anc")
+        # n/2 * log(n) for the rotation gates + n * log(n) for the conjunction gate
+        print(f"  Creating {3 * int(self._n / 2) * self._logn} ancillae qubits...")
+
+        self._ranc = AncillaRegister(3 * int(self._n / 2) * self._logn, "anc")
         # result qubit
-        self._rout = QuantumRegister(1, name="out")
+        self._rout = QuantumRegister(1, "out")
+        self._cout_outcome = ClassicalRegister(1, "found")
+        self._cout_pos = ClassicalRegister(self._n + 1, "begins")
 
     @property
-    def regs(self):
-        return (
-            self._rd,
-            self._rx,
-            self._ry,
-            self._rli,
-            self._rddneg,
-            self._rddi,
-            self._ranc,
-            self._rout,
-        )
+    def input(self):
+        return {
+            "x": self._x,
+            "y": self._y,
+            "d": self._d,
+            "mode": self._mode,
+            "from_pos": self._j,
+        }
+
+    @property
+    def regs(self) -> Dict[str, QuantumRegister | List[QuantumRegister]]:
+        return {
+            "x": self._rx,
+            "y": self._ry,
+            "d": self._rd,
+            "li": self._rli,
+            "ddinit": self._rddinit,
+            "ddi": self._rddi,
+            "anc": self._ranc,
+            "out": self._rout,
+        }
+
+    @property
+    def cregs(self) -> Dict[str, ClassicalRegister]:
+        return {"found": self._cout_outcome, "begins": self._cout_pos}
 
     def instantiate(self):
-        return FSMInstance(self)
+        return _FSMInstance(self)
 
 
-class FSMInstance:
+class _FSMInstance:
     def __init__(self, fsm: FSM):
+        print("  Setting FSM instance up...")
+        self._ready = False
+        self._measured = False
         self._fsm = fsm
-        self._qc = QuantumCircuit(fsm.regs)
+        _regs: List[QuantumRegister] = []
+        for reg in self._fsm.regs.values():
+            if isinstance(reg, list):
+                _regs.extend(reg)
+            else:
+                _regs.append(reg)
+
+        print("  Creating circuit...")
+        self._qc = QuantumCircuit(*_regs, *list(self._fsm.cregs.values()))
+
+        print("  Initializing input registers...")
+        for i, bit in enumerate(bin(self.d)[2:]):
+            if bit == "1":
+                self._qc.x(self.di[i])
+
+        _inx, _iny = (self._fsm.input["x"], self._fsm.input["y"])
+        _regx, _regy = self.xy
+        for i, bit in enumerate(_inx):
+            if bit == "1":
+                self._qc.x(_regx[i])
+        for i, bit in enumerate(_iny):
+            if bit == "1":
+                self._qc.x(_regy[i])
+
+        if self.mode is FSMMode.FPM:
+            _ddinit = "".join(["1", "0" * self.n])
+        elif self.mode is FSMMode.FFP:
+            _ddinit = "".join(
+                ["0" * self.from_pos, "1", "0" * (self.n - self.from_pos)]
+            )
+        else:
+            _ddinit = "1" * self.n
+        for i, bit in enumerate(_ddinit):
+            if bit == "1":
+                self._qc.x(self.ddinit[i])
+        print("FSM instance initialization successful.")
 
     @property
-    def xy(self):
+    def ready(self) -> bool:
+        return self._ready
+
+    @property
+    def measured(self) -> bool:
+        return self._measured
+
+    @property
+    def mode(self) -> FSMMode:
+        return self._fsm.input["mode"]
+
+    @property
+    def from_pos(self) -> int:
+        if not self._fsm.input["from_pos"]:
+            raise KeyError("FSM instance is not in FFP mode")
+
+    @property
+    def xy(self) -> tuple[QuantumRegister]:
         """Input registers"""
-        return self._fsm._rx, self._fsm._ry
+        return self._fsm.regs["x"], self._fsm.regs["y"]
 
     @property
-    def n(self):
+    def n(self) -> int:
         """Length of input strings"""
-        return self._fsm._rx.size
+        return self._fsm.regs["x"].size
 
     @property
-    def nd(self):
+    def d(self) -> QuantumRegister:
         """Fixed length of the common substring to search"""
-        return self._fsm._d
+        return self._fsm.input["d"]
 
     @property
-    def ndbits(self):
+    def dsize(self) -> int:
         """Length of binary representation of d"""
-        return self._fsm._rd.size
+        return floor(log2(self.d)).astype(int) + 1
 
     @property
-    def d(self):
+    def di(self) -> QuantumRegister:
         """Reversed binary representation of d"""
-        return self._fsm._rd
+        return self._fsm.regs["d"]
 
     @property
-    def qc(self):
+    def qc(self) -> QuantumCircuit:
         """Quantum circuit instance"""
         return self._qc
 
     @property
-    def rli(self):
+    def li(self) -> List[QuantumRegister]:
         """λ bitvectors"""
-        return self._fsm._rli
+        return self._fsm.regs["li"]
 
     @property
-    def ddreg_init(self):
+    def ddinit(self) -> QuantumRegister:
         """D-1 bitvector used in the initialization phase"""
-        return self._fsm._rddneg
+        return self._fsm.regs["ddinit"]
 
     @property
-    def ddregs(self):
+    def ddi(self) -> List[QuantumRegister]:
         """Di bitvectors"""
-        return self._fsm._rddi
+        return self._fsm.regs["ddi"]
+
+    @property
+    def ancillae(self) -> AncillaRegister:
+        """Ancillae register to achieve parallelism in rotation"""
+        return self._fsm.regs["anc"]
+
+    @property
+    def out(self) -> QuantumRegister:
+        """Final output register"""
+        return self._fsm.regs["out"]
+
+    @property
+    def result(self) -> tuple[ClassicalRegister]:
+        """Measurement results: algorithm outcome (match was found or not) and start position of the common substring"""
+        if not self.measured:
+            raise RuntimeError(
+                "The output qubits were not measured yet. Please execute the algorithm before looking for results."
+            )
+        return self._fsm.cregs["found"], self._fsm.cregs["begins"]
 
     def build(self):
-        self.apply(reverse, self.d).apply((match, (*self.xy, self.rli[0]), None)),
+        REV = FSMGate(reverse, [self.di])
+        M = FSMGate(match, [*self.xy, self.li[0]])
 
-        for i in range(len(self.rli)):
-            self.apply((extend, (self.rli[i], self.rli[i + 1])), {"i": i + 1})
+        self.apply(REV, M)
+
+        print("  Applying extension gates to λ registries...")
+        for i in range(len(self.li) - 1):
+            EXT = FSMGate(extend, [self.li[i], self.li[i + 1]], params={"i": i + 1})
+            self.apply(EXT)
 
         # repeat for each Di register, with i = 1...log(n)
-        for i, ddreg in enumerate(self.ddregs):
-            self.apply(
-                (
-                    bitwise_cand,
-                    (self.d[i], self.rli[i], ddreg, self.ddregs[i + 1]),
-                    None,
-                )
+        print(
+            "  Applying controlled bitwise AND, rotation and reverse-controlled copy gates to D registries..."
+        )
+        _ddall = [self.ddinit, *self.ddi]
+        for i in range(len(self.ddi)):
+            # for each "block" of 3n/2 ancillae, the first n are used for the conjunction gate and the last n/2 ones for the rotation gates
+            # this process of subdividing ancillae register is done exactly log(n) times
+            first_anc_conj = i * 3 * int(self.n / 2)
+            first_anc_rot = first_anc_conj + self.n
+
+            ctrl = FSMGateControl(self.di[i], False)
+            rctrl = FSMGateControl(self.di[i], True)
+            AND = FSMGate(
+                bitwise_cand,
+                [
+                    self.di[i],
+                    self.li[i],
+                    _ddall[i],
+                    AncillaRegister(
+                        name="anc_cj",
+                        bits=self.ancillae[first_anc_conj : first_anc_conj + self.n],
+                    ),
+                    _ddall[i + 1],
+                ],
             )
-            self.apply(
-                (rot, (self.ddregs[i + 1], self.d), {"i": 2**i}), controls=[self.d[i]]
+            ROT = FSMGate(
+                rot,
+                [
+                    _ddall[i + 1],
+                    AncillaRegister(
+                        name="anc_rot",
+                        bits=self.ancillae[
+                            first_anc_rot : first_anc_rot + int(self.n / 2)
+                        ],
+                    ),
+                ],
+                [ctrl],
+                {"m": 2**i},
             )
-            self.apply(())
+            CRC = FSMGate(
+                rccopy,
+                [_ddall[i], _ddall[i + 1]],
+                [rctrl],
+            )
+            self.apply(AND, ROT, CRC)
+        print(f"  Applying disjunction to D{len(self.ddi)-1}...")
+        OR = FSMGate(unary_or, [self.ddi[len(self.ddi) - 1], self.out])
+        self.apply(OR)
+        self._qc.draw(filename="FSM", output="mpl")
+        print("Circuit building successful.")
+        self._ready = True
+        return self
 
-            # qc = (
-            #     qc.compose(rot(dd[i + 1], d, 2**i).control(1), [d[i], ddreg])
-            qc.compose(rccopy(d[i], ddreg, dd[i + 1]), [d[i], ddreg, dd[i + 1]])
-            # )
-
-        qc = qc.compose(unary_or(dd[ceil(log(n))], out), [dd[ceil(log(n))], out])
-        qc.draw(filename="qc", fold=n, output="mpl", vertical_compression="high")
-
-    def apply(self, *gates, controls=[]) -> QuantumCircuit:
+    def apply(self, *gates: FSMGate):
         for gate in gates:
-            op, regs, params = gate
-            unpacked_regs = []
-            for reg in regs:
-                unpacked_regs.append(*reg)
-            if controls:
+            gate_qubits = []
+            for reg in gate.regs:
+                if isinstance(reg, Qubit):
+                    gate_qubits.append(reg)
+                else:
+                    gate_qubits.extend(reg)
+            if gate.controls:
+                ctrl_qubits = [ctrl.qubit for ctrl in gate.controls]
+                # duplicated_qubits = (set(*gate_qubits) + set(*ctrl_qubits)) - (set(*gate_qubits) - set(*ctrl_qubits))
+                # if len(duplicated_qubits) != len(gate_qubits) + len(ctrl_qubits):
+                #     qubits = self._remove_dup_qubits([*ctrl_qubits, *gate_qubits])
                 self._qc = self._qc.compose(
-                    op(*regs, **params).control(len(controls)),
-                    [*controls, *unpacked_regs],
+                    gate.op(*gate.regs, **gate.params).control(
+                        len(gate.controls),
+                        ctrl_state="".join(
+                            [("0" if ctrl.reverse else "1") for ctrl in gate.controls]
+                        ),
+                    ),
+                    [*ctrl_qubits, *gate_qubits],
                 )
             else:
-                self._qc = self._qc.compose(op(*regs, **params), unpacked_regs)
-        return self._qc
+                self._qc = self._qc.compose(
+                    gate.op(*gate.regs, **gate.params), gate_qubits
+                )
+        return self
+
+    def revert(self):
+        self._qc = QuantumCircuit(list(self._fsm.regs.values()))
+
+    def execute(self, iterations=1):
+        if not self.ready:
+            raise RuntimeError(
+                "The circuit was not initialized yet. Use instance.build() before executing to initialize the algorithm circuit"
+            )
+        self._qc.measure(self.out, self._fsm.cregs["found"])
+        self._qc.measure(self.ddi[len(self.ddi) - 1], self._fsm.cregs["begins"])
+
+        from qiskit.primitives import Sampler
+
+        sampler = Sampler()
+
+        job = sampler.run(self._qc, shots=iterations)
+        result = job.result()
+        print(result.quasi_dists[0].binary_probabilities())

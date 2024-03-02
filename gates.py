@@ -7,24 +7,27 @@
 # – the register disjunction operator (∨)
 # – the copy operator with reverse ctrl (C)
 
-from math import ceil, floor, log
+from numpy import ceil, floor, log2, rint
 from qiskit.circuit import (
     QuantumCircuit,
     QuantumRegister,
     AncillaRegister,
+    Qubit,
 )
+from qiskit.circuit.quantumcircuit import QubitSpecifier
 
 
-def fanout(ctrl: QuantumRegister, x: QuantumRegister):
-    # if ctrl.size != 1:
-    #     raise NotImplementedError(
-    #         "Fanout operator with more than 1 qubit is not supported"
-    #     )
-    qc = QuantumCircuit(ctrl, x)
-    qc.cx(ctrl[0], x[0])
+def fanout(src: Qubit, x: QuantumRegister):
+    """fanouts single qubit to each qubit of a register"""
+    if not isinstance(src, Qubit):
+        raise NotImplementedError(
+            "Fanout operator with more than one source is not supported"
+        )
+    qc = QuantumCircuit([src], x)
+    qc.cx(src, x[0])
     n = x.size
 
-    for j in (2**x for x in range(ceil(log(n)))):
+    for j in (2**x for x in range(ceil(log2(n)).astype(int))):
         # print(f"j={j}")
         for i in range(j):
             # print(f"(x[{i}], x[{j+i}])")
@@ -35,6 +38,7 @@ def fanout(ctrl: QuantumRegister, x: QuantumRegister):
 
 
 def match(x: QuantumRegister, y: QuantumRegister, result: QuantumRegister):
+    """initializes λ0 bitvector"""
     if x.size != y.size:
         raise ValueError("Registers size don't match")
     #    result = QuantumRegister(x.size, name="λ0")
@@ -61,7 +65,8 @@ def match(x: QuantumRegister, y: QuantumRegister, result: QuantumRegister):
     return qc.to_gate(label="M(x,y)")
 
 
-def extend(bitvec: QuantumRegister, result: QuantumRegister, i: int):
+def extend(bitvec: QuantumRegister, result: QuantumRegister, i: int = 1):
+    """extends λi-1 bitvector to λi"""
     #    result = QuantumRegister(bitvec.size, name=f"λ{i}")
     qc = QuantumCircuit(bitvec, result)
     if i != 1:
@@ -82,8 +87,9 @@ def extend(bitvec: QuantumRegister, result: QuantumRegister, i: int):
 
 
 def reverse(x: QuantumRegister):
+    """reverses the given register"""
     qc = QuantumCircuit(x)
-    for i in range(floor(x.size / 2.0)):
+    for i in range(floor(x.size / 2).astype(int)):
         qc.swap(x[i], x[x.size - 1 - i])
     qc.draw(filename="reverse", output="mpl")
     return qc.to_gate(label="REV")
@@ -93,16 +99,22 @@ def bitwise_cand(
     ctrl: QuantumRegister,
     x: QuantumRegister,
     y: QuantumRegister,
+    anc: AncillaRegister,
     result: QuantumRegister,
 ):
-    qc = QuantumCircuit(ctrl, x, y, result)
-    for i in range(result.size):
-        qc.mcx([ctrl[0], x[i], y[i]], result[i])
+    """controlled AND between bits of two registers"""
+    if anc.size != x.size or anc.size != y.size - 1:
+        raise ValueError("Ancillae and input register sizes are inconsistent")
+    qc = QuantumCircuit([ctrl], anc, x, y, result)
+    qc = qc.compose(fanout(ctrl, anc), [ctrl, *anc])
+    for i in range(x.size):
+        qc.mcx([anc[i], x[i], y[i]], result[i + 1])
     qc.draw(filename="bitwise_cand", output="mpl")
     return qc.to_gate(label="CAND")
 
 
 def unary_or(x: QuantumRegister, r: QuantumRegister):
+    """puts disjunction result of x in the r qubit"""
     qc = QuantumCircuit(x, r)
     for bit in x:
         qc.x(bit)
@@ -114,67 +126,70 @@ def unary_or(x: QuantumRegister, r: QuantumRegister):
     return qc.to_gate(label="OR")
 
 
-def rccopy(ctrl: QuantumRegister, x: QuantumRegister, result: QuantumRegister):
-    qc = QuantumCircuit(ctrl, x, result)
-    qc.x(ctrl[0])
+def rccopy(x: QuantumRegister, result: QuantumRegister):
+    """copies x qubits in result register with reversal control"""
+    qc = QuantumCircuit(x, result)
     for i in range(result.size):
-        qc.ccx(ctrl[0], x[i], result[i], ctrl_state="01")
-    qc.x(ctrl[0])
+        qc.cx(x[i], result[i])
     qc.draw(filename="rcopy", output="mpl")
     return qc.to_gate(label="CRC")
 
 
-def arccopy(
-    ctrl: QuantumRegister,
-    x: QuantumRegister,
-    anc: AncillaRegister,
-    result: QuantumRegister,
-):
-    qc = QuantumCircuit(ctrl, x, result)
-    qc.x(ctrl[0])
-    qc.cx(ctrl[0], [bit for bit in anc])
-    for i in range(result.size):
-        qc.cx(anc[i], result[i])
-    qc.x([ctrl[0], *[bit for bit in anc]])
-    qc.draw(filename="acopy", output="mpl")
-    return qc.to_gate(label="ACRC")
+# def arccopy(
+#     ctrl: QuantumRegister,
+#     x: QuantumRegister,
+#     anc: AncillaRegister,
+#     result: QuantumRegister,
+# ):
+#     """copies x qubits in result register with reversal control using ancillae qubits"""
+#     qc = QuantumCircuit(ctrl, x, result)
+#     qc.x(ctrl[0])
+#     qc.cx(ctrl[0], [bit for bit in anc])
+#     for i in range(result.size):
+#         qc.cx(anc[i], result[i])
+#     qc.x([ctrl[0], *[bit for bit in anc]])
+#     qc.draw(filename="acopy", output="mpl")
+#     return qc.to_gate(label="ACRC")
 
 
-# def rot(n, k, block_size=1):
-#     qc = QuantumCircuit(n, name=f"rot_k={k}")
-#     stop = int(np.log2(n)) - int(np.log2(k * block_size)) + 2
-#     for i in range(block_size, stop):
-#         for j in range(0, int(n / (k * (2**i)))):
-#             for x in range(j * k * (2**i), k * ((j * 2**i + 1))):
-#                 for offset in range(block_size):
-#                     inizio_swap = x + k * offset
-#                     fine_swap = x + 2 ** (i - 1) * k + k * offset
-#                     qc.swap(inizio_swap, fine_swap)
+def rot(x: QuantumRegister, anc: AncillaRegister, m: int = 0):
+    """Cyclically rotates the input register of m positions, with m power of 2,
+    only using swap operations, each controlled by an ancillae qubit leveraged to achieve parallelism.
+    """
 
-#     # qkt.draw_circuit(qc)
-#     rot_gate = qc.to_gate(label="Rot_" + str(k))
-#     return rot_gate
+    """Rotates the input register of a number of position represented by register `k` reversed,
+    composing multiple cyclic rotation gates each controlled by one of the qubits in `k`
+    (i-th gate is controlled by i-th qubit of `k`, assuming it was already reversed).
 
+    Each cyclic rotation gate rotates `x` of `2^i` positions (where `i` depends on the index of the controlling bit in `k`)
+    only using swap operation, each controlled by an ancillae qubit leveraged to achieve parallelism.
 
-def rot(x: QuantumRegister, k: QuantumRegister, anc: AncillaRegister, i: int):
-    if k.size != log(x.size):
+    Args:
+        - `x` Register to rotate
+        - `m` Number of positions to rotate
+        - `anc` Register of ancillae qubits
+
+    Raises:
+        - `ValueError` if `anc` size is not exactly `(x.size * log2(x.size)) / 2`
+
+    Complexity:
+        - volume: `nlog2^3(n)/2` i.e. `O(nlog2^3(n))`
+        - depth: `Θ(log2^3(n))`
+    """
+    if not log2(m).is_integer():
         raise NotImplementedError(
-            "Cyclic rotation of any number of positions not implemented"
+            "Cyclic rotation is implemented for powers of two only"
         )
-    if log(x.size) != anc.size:
-        raise ValueError("Ancillae register must have exactly log(n) qubits")
+    if anc.size != int(x.size / 2):
+        raise ValueError(
+            "Ancillae register must be half the size of the input register x"
+        )
 
-    qc = QuantumCircuit(x, k, anc)
-    # for i, ki in enumerate(k):
-    qc = qc.compose(roll2m(x, i).control(1), [k[i], *anc, *x])
-    return qc.to_gate(label=f"ROT{k}")
+    qc = QuantumCircuit(x, anc)
+    for i in range(1, ceil(log2(x.size)).astype(int) - m + 1):
+        for j in range(int(x.size / (2**i * m))):
+            for idx, q in enumerate(range(j * m * 2**i, m * (j * 2**i + 1))):
+                qc.cswap(anc[idx], x[q], x[q + m * 2 ** (i - 1)])
 
-
-def roll2m(x: QuantumRegister, m: int):
-    qc = QuantumCircuit(x)
-    k = 2**m
-    for i in range(1, log(x.size) - m + 1):
-        for j in range(x.size / (2**i * k)):
-            for q in range(j * k * 2**i, -1 + k * (j * 2**i + 1)):
-                qc.swap(x[q], x[q + k * 2 ** (i - 1)])
-    return qc.to_gate(label=f"R{m}")
+    qc.draw(filename=f"rot{m}", output="mpl")
+    return qc.to_gate(label=f"ROT{m}")
