@@ -7,18 +7,25 @@
 # – the register disjunction operator (∨)
 # – the copy operator with reverse ctrl (C)
 
-from numpy import ceil, floor, log2, rint
-from qiskit.circuit import (
+from numpy import ceil, floor, log2
+from qiskit.circuit.quantumcircuit import (
     QuantumCircuit,
     QuantumRegister,
-    AncillaRegister,
+    QuantumRegister,
     Qubit,
 )
-from qiskit.circuit.quantumcircuit import QubitSpecifier
 
 
 def fanout(src: Qubit, x: QuantumRegister):
-    """fanouts single qubit to each qubit of a register"""
+    """Fanouts `src` qubit to each qubit of `x`.
+
+    Args:
+        - `src` (Qubit): copy source (this is often a control bit)
+        - `x` (QuantumRegister): copy destination
+
+    Raises:
+        - `NotImplementedError`: if `src` specifies more than one `Qubit` (i.e. it is not a `Qubit` instance)
+    """
     if not isinstance(src, Qubit):
         raise NotImplementedError(
             "Fanout operator with more than one source is not supported"
@@ -38,7 +45,17 @@ def fanout(src: Qubit, x: QuantumRegister):
 
 
 def match(x: QuantumRegister, y: QuantumRegister, result: QuantumRegister):
-    """initializes λ0 bitvector"""
+    """Checks which qubits match between `x` and `y` and puts the result into `result` register.
+
+    In FSM algorithm, it initializes λ0 bitvector.
+
+    Args:
+        - `x`, `y`: (`QuantumRegister`): input registers
+        - `result`: (`QuantumRegister`): output register
+
+    Raises:
+        - `ValueError` if registers sizes are not equal
+    """
     if x.size != y.size:
         raise ValueError("Registers size don't match")
     #    result = QuantumRegister(x.size, name="λ0")
@@ -66,8 +83,15 @@ def match(x: QuantumRegister, y: QuantumRegister, result: QuantumRegister):
 
 
 def extend(bitvec: QuantumRegister, result: QuantumRegister, i: int = 1):
-    """extends λi-1 bitvector to λi"""
-    #    result = QuantumRegister(bitvec.size, name=f"λ{i}")
+    """Extends `bitvec` λ bitvector into `result` register to make it a λ bitvector of order `i`.
+
+    It is used to extend λ`i-1` into λ`i`, where λ`i` is a bitvector whose `j`-th bit is set to 1 if substrings of length `2**i` starting from position `j` are equal (i.e. `x[j : j + 2**i - 1] == y[j : j + 2**i - 1]` ) .
+
+    Args:
+        - `bitvec` (QuantumRegister): input bitvector
+        - `result` (QuantumRegister): output bitvector
+        - `i` (int): order of extension
+    """
     qc = QuantumCircuit(bitvec, result)
     if i != 1:
         pos_list = range(result.size)
@@ -87,7 +111,10 @@ def extend(bitvec: QuantumRegister, result: QuantumRegister, i: int = 1):
 
 
 def reverse(x: QuantumRegister):
-    """reverses the given register"""
+    """Reverses the qubit states of `x`.
+
+    Args:
+        - `x` (QuantumRegister): register to reverse"""
     qc = QuantumCircuit(x)
     for i in range(floor(x.size / 2).astype(int)):
         qc.swap(x[i], x[x.size - 1 - i])
@@ -96,38 +123,55 @@ def reverse(x: QuantumRegister):
 
 
 def bitwise_cand(
-    ctrl: QuantumRegister,
+    ctrl: Qubit,
     x: QuantumRegister,
     y: QuantumRegister,
-    anc: AncillaRegister,
+    anc: QuantumRegister,
     result: QuantumRegister,
 ):
-    """controlled AND between bits of two registers"""
+    """Computes bitwise AND between `x` and `y` if `ctrl` state is set to 1.
+
+    Fanouts `ctrl` qubit into `anc` ancillae register to achieve parallelism when applying
+
+    Args:
+        - `ctrl` (Qubit): control qubit, used both for gate conditional application and in fanout gate
+        - `x`, `y` (QuantumRegister): input registers
+        - `anc` (QuantumRegister): ancillae register to copy `ctrl` state to
+        - `result` (QuantumRegister): output register
+        -"""
     if anc.size != x.size or anc.size != y.size - 1:
         raise ValueError("Ancillae and input register sizes are inconsistent")
     qc = QuantumCircuit([ctrl], anc, x, y, result)
     qc = qc.compose(fanout(ctrl, anc), [ctrl, *anc])
     for i in range(x.size):
-        qc.mcx([anc[i], x[i], y[i]], result[i + 1])
+        qc.mcx([anc[i], x[i], y[i]], result[i])
     qc.draw(filename="bitwise_cand", output="mpl")
     return qc.to_gate(label="CAND")
 
 
-def unary_or(x: QuantumRegister, r: QuantumRegister):
-    """puts disjunction result of x in the r qubit"""
+def unary_or(x: QuantumRegister, r: Qubit):
+    """Computes bitwise unary OR on `x` and puts the result in `r`.
+
+    Args:
+        - `x` (QuantumRegister): input register
+        - `r` (Qubit): output qubit"""
     qc = QuantumCircuit(x, r)
     for bit in x:
         qc.x(bit)
-    qc.mcx([*x], r[0])
+    qc.mcx([*x], r)
     for bit in x:
         qc.x(bit)
-    qc.x(r[0])
+    qc.x(r)
     qc.draw(filename="unary_or", output="mpl")
     return qc.to_gate(label="OR")
 
 
-def rccopy(x: QuantumRegister, result: QuantumRegister):
-    """copies x qubits in result register with reversal control"""
+def copy(x: QuantumRegister, result: QuantumRegister):
+    """Copies `x` qubits in `result`.
+
+    Args:
+        - `x` (QuantumRegister): input register
+        - `result` (QuantumRegister): output register"""
     qc = QuantumCircuit(x, result)
     for i in range(result.size):
         qc.cx(x[i], result[i])
@@ -135,10 +179,10 @@ def rccopy(x: QuantumRegister, result: QuantumRegister):
     return qc.to_gate(label="CRC")
 
 
-# def arccopy(
+# def acopy(
 #     ctrl: QuantumRegister,
 #     x: QuantumRegister,
-#     anc: AncillaRegister,
+#     anc: QuantumRegister,
 #     result: QuantumRegister,
 # ):
 #     """copies x qubits in result register with reversal control using ancillae qubits"""
@@ -152,14 +196,14 @@ def rccopy(x: QuantumRegister, result: QuantumRegister):
 #     return qc.to_gate(label="ACRC")
 
 
-def rot(x: QuantumRegister, anc: AncillaRegister, k: int = 1):
+def rot(x: QuantumRegister, anc: QuantumRegister, k: int = 1):
     """Cyclically rotates the input register of k positions, with k power of 2,
     only using swap operations, each controlled by an ancillae qubit leveraged to achieve parallelism.
 
     Args:
         - `x` Register to rotate
-        - `k` Number of positions to rotate
         - `anc` Register of ancillae qubits
+        - `k` Number of positions to rotate
 
     Raises:
         - `ValueError` if `anc` size is not exactly `(x.size * log2(x.size)) / 2`

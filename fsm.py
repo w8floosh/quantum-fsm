@@ -1,31 +1,41 @@
-from qiskit.circuit.quantumcircuit import (
+from qiskit.circuit import (
     ClassicalRegister,
     QuantumCircuit,
     QuantumRegister,
-    AncillaRegister,
+    QuantumRegister,
     Qubit,
 )
 from typing import Dict, List
 from numpy import floor, log2
 from .entities import FSMGate, FSMGateControl, FSMMode
+from qiskit_ibm_runtime import QiskitRuntimeService
 from .gates import (
     bitwise_cand,
     extend,
     match,
     unary_or,
-    rccopy,
+    copy,
     reverse,
     rot,
 )
 
 
 class FSM:
-    def __init__(self, x: str, y: str, d: int, mode: FSMMode, **kwargs):
+    def __init__(self, x: str, y: str, d: int, mode: FSMMode, backend: str, **kwargs):
         """Initializes a fixed substring matching algorithm.
 
         Args:
-            `x`, `y` (str): Non-empty input strings in binary format, equally sized.
-            `d` (int): Fixed length of the common substring(s) to search.
+            - `x`, `y` (str): Non-empty input strings in binary format, equally sized.
+            - `d` (int): Fixed length of the common substring(s) to search.
+
+        Raises:
+            - `ValueError` if one of these situations occur:
+                - any of the input strings is empty
+                - input strings lengths do not match
+                - `d` is less than 2
+                - `mode` is FFP and starting position index was not defined
+
+            - `TypeError` if any of the input strings is not in binary format
         """
         if not x or not y:
             raise ValueError("Input strings cannot be empty")
@@ -87,11 +97,13 @@ class FSM:
         # n/2 * log(n) for the rotation gates + n * log(n) for the conjunction gate
         print(f"  Creating {3 * int(self._n / 2) * self._logn} ancillae qubits...")
 
-        self._ranc = AncillaRegister(3 * int(self._n / 2) * self._logn, "anc")
+        self._ranc = QuantumRegister(3 * int(self._n / 2) * self._logn, "anc")
         # result qubit
         self._rout = QuantumRegister(1, "out")
         self._cout_outcome = ClassicalRegister(1, "found")
         self._cout_pos = ClassicalRegister(self._n + 1, "begins")
+
+        self._backend = backend
 
     @property
     def input(self):
@@ -102,6 +114,7 @@ class FSM:
             "d": self._d,
             "mode": self._mode,
             "from_pos": self._j,
+            "backend": self._backend,
         }
 
     @property
@@ -124,6 +137,7 @@ class FSM:
         return {"found": self._cout_outcome, "begins": self._cout_pos}
 
     def instantiate(self):
+        """Instantiates a new algorithm instance object `_FSMInstance` using input from the FSM object."""
         return _FSMInstance(self)
 
 
@@ -179,6 +193,11 @@ class _FSMInstance:
     def measured(self) -> bool:
         """Returns True if the circuit output was already measured"""
         return self._measured
+
+    @property
+    def backend(self) -> str:
+        """IBM backend name"""
+        return self._fsm.input["backend"]
 
     @property
     def mode(self) -> FSMMode:
@@ -241,7 +260,7 @@ class _FSMInstance:
         return self._fsm.regs["ddi"]
 
     @property
-    def ancillae(self) -> AncillaRegister:
+    def ancillae(self) -> QuantumRegister:
         """Ancillae register to achieve parallelism in rotation"""
         return self._fsm.regs["anc"]
 
@@ -256,7 +275,10 @@ class _FSMInstance:
 
         Returns:
             - `found`: algorithm outcome (match was found or not)
-            - `begins`: start position of the common substring"""
+            - `begins`: start position of the common substring
+
+        Raises:
+            - `RuntimeError`: if the circuit was not executed yet"""
         if not self.measured:
             raise RuntimeError(
                 "The output qubits were not measured yet. Please execute the algorithm before looking for results."
@@ -264,6 +286,10 @@ class _FSMInstance:
         return self._fsm.cregs["found"], self._fsm.cregs["begins"]
 
     def build(self):
+        """Builds the algorithm circuit by composing all the necessary gates in order.
+
+        Note that all the gates are made to have the lowest depth possible
+        at the expense of the number of lines used."""
         REV = FSMGate(reverse, [self.di])
         M = FSMGate(match, [*self.xy, self.li[0]])
 
@@ -293,7 +319,7 @@ class _FSMInstance:
                     self.di[i],
                     self.li[i],
                     _ddall[i],
-                    AncillaRegister(
+                    QuantumRegister(
                         name="anc_cj",
                         bits=self.ancillae[first_anc_conj : first_anc_conj + self.n],
                     ),
@@ -303,8 +329,8 @@ class _FSMInstance:
             ROT = FSMGate(
                 rot,
                 [
-                    QuantumRegister(name=f"D{i}", bits=_ddall[i + 1][1:]),
-                    AncillaRegister(
+                    _ddall[i + 1],
+                    QuantumRegister(
                         name="anc_rot",
                         bits=self.ancillae[
                             first_anc_rot : first_anc_rot + int(self.n / 2)
@@ -315,7 +341,7 @@ class _FSMInstance:
                 {"k": 2**i},
             )
             CRC = FSMGate(
-                rccopy,
+                copy,
                 [_ddall[i], _ddall[i + 1]],
                 [rctrl],
             )
@@ -329,6 +355,14 @@ class _FSMInstance:
         return self
 
     def apply(self, *gates: FSMGate):
+        """Applies the set of `gates` passed as arguments in the order they were passed.
+
+        Args:
+            - `*gates` (tuple[FSMGate]): gates to apply
+
+        Returns:
+            - `self`: useful if you want to concatenate calls"""
+
         for gate in gates:
             gate_qubits = []
             for reg in gate.regs:
@@ -338,9 +372,7 @@ class _FSMInstance:
                     gate_qubits.extend(reg)
             if gate.controls:
                 ctrl_qubits = [ctrl.qubit for ctrl in gate.controls]
-                # duplicated_qubits = (set(*gate_qubits) + set(*ctrl_qubits)) - (set(*gate_qubits) - set(*ctrl_qubits))
-                # if len(duplicated_qubits) != len(gate_qubits) + len(ctrl_qubits):
-                #     qubits = self._remove_dup_qubits([*ctrl_qubits, *gate_qubits])
+
                 self._qc = self._qc.compose(
                     gate.op(*gate.regs, **gate.params).control(
                         len(gate.controls),
@@ -357,35 +389,59 @@ class _FSMInstance:
         return self
 
     def revert(self):
+        """Resets circuit removing all the gates."""
         self._qc = QuantumCircuit(list(self._fsm.regs.values()))
 
-    def execute(self, token: str, iterations=1):
+    def execute(self, token: str, iterations=42):
+        """Sends an execute request to the IBM backend and print results' quasi-probabilities distribution.
+
+        Args:
+            - `token` (str): IBM Quantum Platform API token
+            - `iterations` (int): number of algorithm executions (shots) for job results sampling
+
+        Raises:
+            - `RuntimeError`: if the circuit was not built yet
+        """
         if not self.ready:
             raise RuntimeError(
                 "The circuit was not initialized yet. Use instance.build() before executing to initialize the algorithm circuit"
             )
         self._qc.measure(self.out, self._fsm.cregs["found"])
-        self._qc.measure(self.ddi[len(self.ddi) - 1], self._fsm.cregs["begins"])
+        # self._qc.measure(self.ddi[len(self.ddi) - 1], self._fsm.cregs["begins"])
 
         from qiskit_ibm_runtime import QiskitRuntimeService, Sampler, Options
+        from qiskit.visualization import plot_circuit_layout
+        from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
-        print("token:", token)
-        QiskitRuntimeService.save_account(
+        print("Connecting to", self.backend, "with token", token)
+
+        service = QiskitRuntimeService(
             channel="ibm_quantum",
             instance="ibm-q/open/main",
-            token="148653106263ee232f0b7d905569ab477aa935e3bf0e178547dbcecc5df67e60d00d61bad9207789c66c8a0c7df5ab906429dec717f3541bb04f2d27c544ab97",
-            overwrite=True,
-            # token=token,
+            token=str(token),
         )
-        service = QiskitRuntimeService()
-        backend = service.backend("ibm_kyoto")
+        backend = service.backend(self.backend)
 
-        # options = Options()
-        # options.resilience_level = 1
+        options = Options()
+        options.environment.log_level = "DEBUG"
+        options.execution.shots = iterations
+        options.resilience_level = 1
         # options.optimization_level = 2
 
-        job = Sampler(backend).run(self._qc, shots=iterations)
-        # print(f"Running job {job.job_id()} on IBM Quantum Platform...")
+        pass_manager = generate_preset_pass_manager(
+            optimization_level=2,
+            backend=backend,
+            layout_method="dense",
+        )
+        transpiled = pass_manager.run(self._qc)
+
+        print("Circuit transpiled with depth:", transpiled.depth())
+        plot_circuit_layout(transpiled, backend, filename="circuit.png")
+
+        job = Sampler(backend, options=options).run(transpiled)
+        print(
+            f"Running job {job.job_id()} on backend {backend.configuration().backend_name}..."
+        )
         result = job.result()
         print(result.quasi_dists[0].binary_probabilities())
         self._measured = True

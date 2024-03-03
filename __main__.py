@@ -23,6 +23,7 @@ parser.add_argument(
 parser.add_argument(
     "-t", "--token", required=True, help="IBM Quantum platform API token"
 )
+parser.add_argument("-b", "--backend", default="ibm_kyoto", help="IBM backend name")
 
 args = parser.parse_args()
 
@@ -54,14 +55,13 @@ print(
 
 if args.mode == "FFP":
     fsm = FSM(
-        args.x, args.y, args.length, args.mode, starting_pos=args.position
+        args.x, args.y, args.length, args.mode, args.backend, starting_pos=args.position
     ).instantiate()
 else:
-    fsm = FSM(args.x, args.y, args.length, args.mode).instantiate()
+    fsm = FSM(args.x, args.y, args.length, args.mode, args.backend).instantiate()
 
 print(f"Building {args.mode} algorithm circuit...")
 fsm = fsm.build()
 
 print("Executing...")
-print("Logging with token:", args.token)
-fsm.execute(f"{args.token}")
+fsm.execute(f"{args.token}", iterations=1000)
