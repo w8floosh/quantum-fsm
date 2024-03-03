@@ -3,6 +3,14 @@
 
  This project aims to implement what was discussed in the paper "Quantum Circuits for Fixed Substring Matching Problems" by Domenico Cantone, Simone Faro, Arianna Pavone and Caterina Viola, freely available at <https://arxiv.org/abs/2308.11758v1>.
 
+## Requirements and dependencies
+- Python 3.11 or greater (not tested in older versions)
+* Graphviz
++ `matplotlib`
+- `numpy`
+* `qiskit[visualization]`
++ `qiskit_ibm_runtime`
+
 ## How to run
 The software can be executed as a module as it is ready to use. 
 An IBM Quantum Platform account is required to obtain a IBM API token to use when creating the job on the IBM backends.
@@ -24,6 +32,8 @@ The algorithms work only for fixed-lengths being powers of 2 and only support bi
 
 Due to the number of qubits involved even in easy cases of use, local simulation is not supported. The software can only be executed on real quantum machines or simulators with a high number (127+) of qubits.
 Furthermore, as of first release period, the algorithm won't work on IBM simulator backends because of a transpilation issue.
+
+Every gate applied in the building phase (including the whole circuit) will be drawn through matplotlib and Graphviz and saved as an image in the current working directory.
 
 ## Performance
 Each of the algorithm modes uses exactly $2(n+1)\log_2{}d + (\frac{13}{2})n\log_2{}n = \mathcal{O}(n\log_2{}n)$ qubits, where $d$ is the fixed length of the substring to search and $n$ is the size of any of the input registers (their size must be equal and a power of 2).
