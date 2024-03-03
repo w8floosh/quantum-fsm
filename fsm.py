@@ -82,7 +82,7 @@ class FSM:
 
         # lambda registers
         self._rli: List[QuantumRegister] = [
-            QuantumRegister(self._n, f"\lambda{i}") for i in range(self._logn + 1)
+            QuantumRegister(self._n, f"\lambda{i}") for i in range(self._nd)
         ]
 
         print(f"  Creating {self._logn+2} D bitvectors registries...")
@@ -90,14 +90,14 @@ class FSM:
         # D registers
         self._rddinit = QuantumRegister(self._n + 1, "D-1")
         self._rddi: List[QuantumRegister] = [
-            QuantumRegister(self._n + 1, f"D{i}") for i in range(self._logn)
+            QuantumRegister(self._n + 1, f"D{i}") for i in range(self._nd)
         ]
 
         # ancillae register
-        # n/2 * log(n) for the rotation gates + n * log(n) for the conjunction gate
-        print(f"  Creating {3 * int(self._n / 2) * self._logn} ancillae qubits...")
+        # n/2 * (log(d)+1) for the rotation gates + n * (log(d)+1) for the conjunction gate
+        print(f"  Creating {3 * int(self._n / 2) * self._nd} ancillae qubits...")
 
-        self._ranc = QuantumRegister(3 * int(self._n / 2) * self._logn, "anc")
+        self._ranc = QuantumRegister(3 * int(self._n / 2) * self._nd, "anc")
         # result qubit
         self._rout = QuantumRegister(1, "out")
         self._cout_outcome = ClassicalRegister(1, "found")
