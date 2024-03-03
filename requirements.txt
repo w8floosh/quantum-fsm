@@ -1,0 +1,5 @@
+matplotlib
+numpy
+graphviz
+qiskit[visualization]
+qiskit_ibm_runtime
