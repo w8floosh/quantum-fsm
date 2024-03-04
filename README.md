@@ -40,6 +40,8 @@ Each of the algorithm modes uses exactly $2(n+1)\log_2{}d + (\frac{13}{2})n\log_
 
 The maximum depth is $\mathcal{O}(\log_2^3{}n)$ as stated in the paper, but several tricks have been leveraged in order to reduce the depth and the computation time at the expense of the number of quantum lines, so that the quantum volume is $\mathcal{O}(n\log_2^4{}n)$ even with those improvements.
 
+These algorithms are still under refining, as the current implementation of the full circuit does not give an actual result with acceptable error when running on real quantum machines.
+
 ## Legal information
 
 This project was not endorsed by or funded by IBM Corporation and it was realized for academic purposes.
