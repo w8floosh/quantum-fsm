@@ -8,12 +8,7 @@
 # – the copy operator with reverse ctrl (C)
 
 from numpy import ceil, floor, log2
-from qiskit.circuit.quantumcircuit import (
-    QuantumCircuit,
-    QuantumRegister,
-    QuantumRegister,
-    Qubit,
-)
+from qiskit.circuit import QuantumCircuit, QuantumRegister, QuantumRegister, Qubit
 
 
 def fanout(src: Qubit, x: QuantumRegister):
@@ -138,13 +133,15 @@ def bitwise_cand(
         - `x`, `y` (QuantumRegister): input registers
         - `anc` (QuantumRegister): ancillae register to copy `ctrl` state to
         - `result` (QuantumRegister): output register
-        -"""
+    """
     if anc.size != x.size or anc.size != y.size - 1:
         raise ValueError("Ancillae and input register sizes are inconsistent")
+
     qc = QuantumCircuit([ctrl], anc, x, y, result)
     qc = qc.compose(fanout(ctrl, anc), [ctrl, *anc])
     for i in range(x.size):
-        qc.mcx([anc[i], x[i], y[i]], result[i])
+        # qc = qc.compose(C3XGate(), [anc[i], x[i], y[i], result[i]])
+        qc.mcx([anc[i], x[i], y[i]], result[i])  # problematic?
     qc.draw(filename="bitwise_cand", output="mpl")
     return qc.to_gate(label="CAND")
 
@@ -159,6 +156,7 @@ def unary_or(x: QuantumRegister, r: Qubit):
     for bit in x:
         qc.x(bit)
     qc.mcx([*x], r)
+    # qc = qc.compose(fanout(x[0], QuantumRegister(bits=x[1:])), [*x, r])
     for bit in x:
         qc.x(bit)
     qc.x(r)
@@ -228,6 +226,15 @@ def rot(x: QuantumRegister, anc: QuantumRegister, k: int = 1):
             for q in range(j * k * 2**i, k * (j * 2**i + 1)):
                 qc.cswap(anc[next_anc % anc.size], x[q], x[q + (2 ** (i - 1)) * k])
                 next_anc += 1
+
+                # or try the following:
+
+                # b0 = anc[next_anc % anc.size]
+                # b1 = x[q]
+                # b2 = x[q + (2 ** (i - 1)) * k]
+                # qc.ccx(b0, b1, b2)
+                # qc.ccx(b0, b2, b1)
+                # qc.ccx(b0, b1, b2)
 
     qc.draw(filename=f"rot{k}", output="mpl")
     return qc.to_gate(label=f"ROT{k}")

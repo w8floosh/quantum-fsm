@@ -1,3 +1,4 @@
+from qiskit import transpile
 from qiskit.circuit import (
     ClassicalRegister,
     QuantumCircuit,
@@ -8,7 +9,6 @@ from qiskit.circuit import (
 from typing import Dict, List
 from numpy import floor, log2
 from .entities import FSMGate, FSMGateControl, FSMMode
-from qiskit_ibm_runtime import QiskitRuntimeService
 from .gates import (
     bitwise_cand,
     extend,
@@ -392,7 +392,7 @@ class _FSMInstance:
         """Resets circuit removing all the gates."""
         self._qc = QuantumCircuit(list(self._fsm.regs.values()))
 
-    def execute(self, token: str, iterations=42):
+    def execute(self, token: str, iterations=42, local=False):
         """Sends an execute request to the IBM backend and print results' quasi-probabilities distribution.
 
         Args:
@@ -402,46 +402,64 @@ class _FSMInstance:
         Raises:
             - `RuntimeError`: if the circuit was not built yet
         """
+
+        from qiskit.transpiler.preset_passmanagers import (
+            generate_preset_pass_manager,
+        )
+        from qiskit_ibm_runtime import Sampler, QiskitRuntimeService
+
+        QiskitRuntimeService.save_account(
+            channel="ibm_quantum", token=token, overwrite=True
+        )
+
         if not self.ready:
             raise RuntimeError(
                 "The circuit was not initialized yet. Use instance.build() before executing to initialize the algorithm circuit"
             )
         self._qc.measure(self.out, self._fsm.cregs["found"])
         # self._qc.measure(self.ddi[len(self.ddi) - 1], self._fsm.cregs["begins"])
+        if not local:
+            from qiskit_ibm_runtime import Options
+            from qiskit.visualization import plot_circuit_layout
 
-        from qiskit_ibm_runtime import QiskitRuntimeService, Sampler, Options
-        from qiskit.visualization import plot_circuit_layout
-        from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+            print("Connecting to", self.backend, "with token", token)
 
-        print("Connecting to", self.backend, "with token", token)
+            service = QiskitRuntimeService(
+                channel="ibm_quantum",
+                instance="ibm-q/open/main",
+                token=str(token),
+            )
+            backend = service.backend(self.backend)
 
-        service = QiskitRuntimeService(
-            channel="ibm_quantum",
-            instance="ibm-q/open/main",
-            token=str(token),
-        )
-        backend = service.backend(self.backend)
+            options = Options()
+            options.environment.log_level = "DEBUG"
+            options.execution.shots = iterations
+            options.resilience_level = 1
+            # options.optimization_level = 2
 
-        options = Options()
-        options.environment.log_level = "DEBUG"
-        options.execution.shots = iterations
-        options.resilience_level = 1
-        # options.optimization_level = 2
+            pass_manager = generate_preset_pass_manager(
+                optimization_level=2,
+                backend=backend,
+                layout_method="dense",
+            )
+            transpiled = pass_manager.run(self._qc)
 
-        pass_manager = generate_preset_pass_manager(
-            optimization_level=2,
-            backend=backend,
-            layout_method="dense",
-        )
-        transpiled = pass_manager.run(self._qc)
+            print("Circuit transpiled with depth:", transpiled.depth())
+            # plot_circuit_layout(transpiled, backend, filename="circuit.png")
 
-        print("Circuit transpiled with depth:", transpiled.depth())
-        plot_circuit_layout(transpiled, backend, filename="circuit.png")
+            job = Sampler(backend, options=options).run(transpiled)
+            print(
+                f"Running job {job.job_id()} on backend {backend.configuration().backend_name}..."
+            )
+            result = job.result()
+            print(result.quasi_dists[0].binary_probabilities())
+        else:
+            from qiskit_aer import QasmSimulator
 
-        job = Sampler(backend, options=options).run(transpiled)
-        print(
-            f"Running job {job.job_id()} on backend {backend.configuration().backend_name}..."
-        )
-        result = job.result()
-        print(result.quasi_dists[0].binary_probabilities())
+            aer_sim = QasmSimulator(method="extended_stabilizer")
+
+            circuit = transpile(self.qc, aer_sim)
+
+            result = aer_sim.run(circuit, shots=iterations).result()
+            print(result.get_counts(circuit))
         self._measured = True

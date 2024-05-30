@@ -17,11 +17,19 @@ parser.add_argument(
 parser.add_argument(
     "-p",
     "--position",
-    help="position index from which to search a common substring (required when mode is 'FFP', else ignored)",
+    help="Position index from which to search a common substring (required when mode is 'FFP', else ignored)",
     type=int,
 )
+mxgroup = parser.add_mutually_exclusive_group(required=True)
+mxgroup.add_argument("-t", "--token", help="IBM Quantum platform API token")
+mxgroup.add_argument(
+    "-T", "--tokenpath", help="Path to read IBM Quantum platform API token from"
+)
 parser.add_argument(
-    "-t", "--token", required=True, help="IBM Quantum platform API token"
+    "-l",
+    "--local",
+    action="store_true",
+    help="Execute the algorithm locally using QASM simulator with extended_stabilizer method",
 )
 parser.add_argument("-b", "--backend", default="ibm_kyoto", help="IBM backend name")
 
@@ -39,13 +47,17 @@ if 2 ** (log2(len(args.x)).astype(int)) != len(args.x):
 if 2 ** (log2(args.length).astype(int)) != args.length:
     parser.error("length must be a power of 2")
 
-if len(args.token) != 128:
+if not args.token and not args.tokenpath:
+    parser.error("IBM Quantum Platform API token is required")
+
+_token = args.token or open(args.tokenpath, "r").read().strip()
+
+if len(_token) != 128:
     parser.error(
         "invalid IBM Quantum Platform API token: (must be a 128 hex digit number)"
     )
-
 try:
-    int(f"0x{args.token}", base=16)
+    int(f"0x{_token}", base=16)
 except:
     parser.error("invalid IBM Quantum Platform API token (must be convertible to hex)")
 
@@ -63,5 +75,5 @@ else:
 print(f"Building {args.mode} algorithm circuit...")
 fsm = fsm.build()
 
-print("Executing...")
-fsm.execute(f"{args.token}", iterations=1000)
+print(f"Executing {'locally' if args.local else 'remotely'}...")
+fsm.execute(str(_token), iterations=10000, local=args.local)

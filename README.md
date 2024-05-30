@@ -16,7 +16,7 @@ The software can be executed as a module as it is ready to use.
 An IBM Quantum Platform account is required to obtain a IBM API token to use when creating the job on the IBM backends.
 The syntax to run the algorithm on IBM machines is the following:
 ```bash
-python -m quantum_fsm [-h] [-m {FPM,FFP,SFSC}] [-p POSITION] -t TOKEN [-b BACKEND] x y length
+python -m quantum_fsm [-h] [-l] [-m {FPM,FFP,SFSC}] [-p POSITION] -t TOKEN [-b BACKEND] x y length
 ```
 
 To see what each argument is used for, please have a look to the command usage help:
