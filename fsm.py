@@ -10,7 +10,7 @@ from typing import Dict, List
 from numpy import floor, log2
 from .entities import FSMGate, FSMGateControl, FSMMode
 from .gates import (
-    bitwise_cand,
+    bitwise_and,
     extend,
     match,
     unary_or,
@@ -94,14 +94,14 @@ class FSM:
         ]
 
         # ancillae register
-        # n/2 * (log(d)+1) for the rotation gates + n * (log(d)+1) for the conjunction gate
-        print(f"  Creating {3 * int(self._n / 2) * self._nd} ancillae qubits...")
+        # n * (log(d)+1) for the conjunction gate
+        # print(f"  Creating {self._n * self._nd} ancillae qubits...")
 
-        self._ranc = QuantumRegister(3 * int(self._n / 2) * self._nd, "anc")
+        # self._ranc = QuantumRegister(self._n * self._nd, "anc")
         # result qubit
         self._rout = QuantumRegister(1, "out")
         self._cout_outcome = ClassicalRegister(1, "found")
-        self._cout_pos = ClassicalRegister(self._n + 1, "begins")
+        # self._cout_pos = ClassicalRegister(self._n + 1, "begins")
 
         self._backend = backend
 
@@ -127,14 +127,17 @@ class FSM:
             "li": self._rli,
             "ddinit": self._rddinit,
             "ddi": self._rddi,
-            "anc": self._ranc,
+            # "anc": self._ranc,
             "out": self._rout,
         }
 
     @property
     def cregs(self) -> Dict[str, ClassicalRegister]:
         """FSM algorithm classical registers"""
-        return {"found": self._cout_outcome, "begins": self._cout_pos}
+        return {
+            "found": self._cout_outcome, 
+            # "begins": self._cout_pos
+        }
 
     def instantiate(self):
         """Instantiates a new algorithm instance object `_FSMInstance` using input from the FSM object."""
@@ -259,10 +262,10 @@ class _FSMInstance:
         """Di bitvectors"""
         return self._fsm.regs["ddi"]
 
-    @property
-    def ancillae(self) -> QuantumRegister:
-        """Ancillae register to achieve parallelism in rotation"""
-        return self._fsm.regs["anc"]
+    # @property
+    # def ancillae(self) -> QuantumRegister:
+    #     """Ancillae register to achieve parallelism in rotation"""
+    #     return self._fsm.regs["anc"]
 
     @property
     def out(self) -> QuantumRegister:
@@ -275,7 +278,6 @@ class _FSMInstance:
 
         Returns:
             - `found`: algorithm outcome (match was found or not)
-            - `begins`: start position of the common substring
 
         Raises:
             - `RuntimeError`: if the circuit was not executed yet"""
@@ -283,7 +285,8 @@ class _FSMInstance:
             raise RuntimeError(
                 "The output qubits were not measured yet. Please execute the algorithm before looking for results."
             )
-        return self._fsm.cregs["found"], self._fsm.cregs["begins"]
+        # return self._fsm.cregs["found"], self._fsm.cregs["begins"]
+        return self._fsm.cregs["found"]
 
     def build(self):
         """Builds the algorithm circuit by composing all the necessary gates in order.
@@ -308,35 +311,18 @@ class _FSMInstance:
         for i in range(len(self.ddi)):
             # for each "block" of 3n/2 ancillae, the first n are used for the conjunction gate and the last n/2 ones for the rotation gates
             # this process of subdividing ancillae register is done exactly log(n) times
-            first_anc_conj = i * 3 * int(self.n / 2)
-            first_anc_rot = first_anc_conj + self.n
+            # first_anc_conj = i * self.n
 
             ctrl = FSMGateControl(self.di[i], False)
             rctrl = FSMGateControl(self.di[i], True)
             AND = FSMGate(
-                bitwise_cand,
-                [
-                    self.di[i],
-                    self.li[i],
-                    _ddall[i],
-                    QuantumRegister(
-                        name="anc_cj",
-                        bits=self.ancillae[first_anc_conj : first_anc_conj + self.n],
-                    ),
-                    _ddall[i + 1],
-                ],
+                bitwise_and,
+                [self.li[i], _ddall[i], _ddall[i + 1]],
+                [ctrl]
             )
             ROT = FSMGate(
                 rot,
-                [
-                    _ddall[i + 1],
-                    QuantumRegister(
-                        name="anc_rot",
-                        bits=self.ancillae[
-                            first_anc_rot : first_anc_rot + int(self.n / 2)
-                        ],
-                    ),
-                ],
+                [_ddall[i + 1]],
                 [ctrl],
                 {"k": 2**i},
             )
@@ -420,7 +406,6 @@ class _FSMInstance:
         # self._qc.measure(self.ddi[len(self.ddi) - 1], self._fsm.cregs["begins"])
         if not local:
             from qiskit_ibm_runtime import Options
-            from qiskit.visualization import plot_circuit_layout
 
             print("Connecting to", self.backend, "with token", token)
 
@@ -454,9 +439,9 @@ class _FSMInstance:
             result = job.result()
             print(result.quasi_dists[0].binary_probabilities())
         else:
-            from qiskit_aer import QasmSimulator
+            from qiskit_aer import AerSimulator
 
-            aer_sim = QasmSimulator(method="extended_stabilizer")
+            aer_sim = AerSimulator(method="matrix_product_state")
 
             circuit = transpile(self.qc, aer_sim)
 

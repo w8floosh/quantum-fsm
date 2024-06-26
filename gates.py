@@ -117,7 +117,7 @@ def reverse(x: QuantumRegister):
     return qc.to_gate(label="REV")
 
 
-def bitwise_cand(
+def bitwise_cand_anc(
     ctrl: Qubit,
     x: QuantumRegister,
     y: QuantumRegister,
@@ -144,6 +144,20 @@ def bitwise_cand(
         qc.mcx([anc[i], x[i], y[i]], result[i])  # problematic?
     qc.draw(filename="bitwise_cand", output="mpl")
     return qc.to_gate(label="CAND")
+
+def bitwise_and(x: QuantumRegister, y: QuantumRegister, result: QuantumRegister):
+    """Computes bitwise AND between `x` and `y` if `ctrl` state is set to 1.
+
+    Args:
+        - `x`, `y` (QuantumRegister): input registers
+        - `result` (QuantumRegister): output register
+    """
+    qc = QuantumCircuit(x, y, result)
+    for i in range(x.size):
+        # qc = qc.compose(C3XGate(), [anc[i], x[i], y[i], result[i]])
+        qc.mcx([x[i], y[i]], result[i])  # problematic?
+    qc.draw(filename="bitwise_and", output="mpl")
+    return qc.to_gate(label="AND")
 
 
 def unary_or(x: QuantumRegister, r: Qubit):
@@ -194,47 +208,69 @@ def copy(x: QuantumRegister, result: QuantumRegister):
 #     return qc.to_gate(label="ACRC")
 
 
-def rot(x: QuantumRegister, anc: QuantumRegister, k: int = 1):
-    """Cyclically rotates the input register of k positions, with k power of 2,
-    only using swap operations, each controlled by an ancillae qubit leveraged to achieve parallelism.
+# def rot(x: QuantumRegister, anc: QuantumRegister, k: int = 1):
+#     """Cyclically rotates the input register of k positions, with k power of 2,
+#     only using swap operations, each controlled by an ancillae qubit leveraged to achieve parallelism.
 
+#     Args:
+#         - `x` Register to rotate
+#         - `anc` Register of ancillae qubits
+#         - `k` Number of positions to rotate
+
+#     Raises:
+#         - `ValueError` if `anc` size is not exactly `(x.size * log2(x.size)) / 2`
+
+#     Complexity:
+#         - volume: `nlog2^3(n)/2` i.e. `O(nlog2^3(n))`
+#         - depth: `Θ(log2^3(n))`
+#     """
+#     if 2 ** (log2(k).astype(int)) != k:
+#         raise NotImplementedError(
+#             "Cyclic rotation is implemented for powers of two only"
+#         )
+#     if anc.size != int(x.size / 2):
+#         raise ValueError(
+#             "Ancillae register must be half the size of the input register x"
+#         )
+
+#     qc = QuantumCircuit(anc, x)
+#     next_anc = 0
+#     for i in range(1, ceil(log2(x.size)).astype(int) - ceil(log2(k)).astype(int) + 1):
+#         for j in range(int(x.size / (2**i * k))):
+#             for q in range(j * k * 2**i, k * (j * 2**i + 1)):
+#                 qc.cswap(anc[next_anc % anc.size], x[q], x[q + (2 ** (i - 1)) * k])
+#                 next_anc += 1
+
+#                 # or try the following:
+
+#                 # b0 = anc[next_anc % anc.size]
+#                 # b1 = x[q]
+#                 # b2 = x[q + (2 ** (i - 1)) * k]
+#                 # qc.ccx(b0, b1, b2)
+#                 # qc.ccx(b0, b2, b1)
+#                 # qc.ccx(b0, b1, b2)
+
+#     qc.draw(filename=f"rot{k}", output="mpl")
+#     return qc.to_gate(label=f"ROT{k}")
+
+def rot(x: QuantumRegister, k: int = 1):
+    """Cyclically rotates the input register of k positions using the reflection method made with swap gates only.
     Args:
         - `x` Register to rotate
-        - `anc` Register of ancillae qubits
         - `k` Number of positions to rotate
 
-    Raises:
-        - `ValueError` if `anc` size is not exactly `(x.size * log2(x.size)) / 2`
-
     Complexity:
-        - volume: `nlog2^3(n)/2` i.e. `O(nlog2^3(n))`
-        - depth: `Θ(log2^3(n))`
+        - volume: `O(n)`
+        - depth: `Θ(1)`
     """
-    if 2 ** (log2(k).astype(int)) != k:
-        raise NotImplementedError(
-            "Cyclic rotation is implemented for powers of two only"
-        )
-    if anc.size != int(x.size / 2):
-        raise ValueError(
-            "Ancillae register must be half the size of the input register x"
-        )
-
-    qc = QuantumCircuit(anc, x)
-    next_anc = 0
-    for i in range(1, ceil(log2(x.size)).astype(int) - ceil(log2(k)).astype(int) + 1):
-        for j in range(int(x.size / (2**i * k))):
-            for q in range(j * k * 2**i, k * (j * 2**i + 1)):
-                qc.cswap(anc[next_anc % anc.size], x[q], x[q + (2 ** (i - 1)) * k])
-                next_anc += 1
-
-                # or try the following:
-
-                # b0 = anc[next_anc % anc.size]
-                # b1 = x[q]
-                # b2 = x[q + (2 ** (i - 1)) * k]
-                # qc.ccx(b0, b1, b2)
-                # qc.ccx(b0, b2, b1)
-                # qc.ccx(b0, b1, b2)
+    qc = QuantumCircuit(x)
+    n = x.size
+    for i in range(1, ceil(n/2).astype(int)):
+        qc.swap(x[i], x[n-i])
+    for j in range(1, ceil(n/2).astype(int)):
+        qb1 = (ceil(k/2).astype(int)-j)%n
+        qb2 = (floor(k/2).astype(int)+j)%n
+        qc.swap(x[qb1], x[qb2])
 
     qc.draw(filename=f"rot{k}", output="mpl")
     return qc.to_gate(label=f"ROT{k}")

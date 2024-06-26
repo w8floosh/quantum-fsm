@@ -44,8 +44,8 @@ if len(args.x) != len(args.y):
 if 2 ** (log2(len(args.x)).astype(int)) != len(args.x):
     parser.error("input strings length must be a power of 2")
 
-if 2 ** (log2(args.length).astype(int)) != args.length:
-    parser.error("length must be a power of 2")
+# if 2 ** (log2(args.length).astype(int)) != args.length:
+#     parser.error("length must be a power of 2")
 
 if not args.token and not args.tokenpath:
     parser.error("IBM Quantum Platform API token is required")
