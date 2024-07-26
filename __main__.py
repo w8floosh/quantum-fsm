@@ -29,9 +29,9 @@ parser.add_argument(
     "-l",
     "--local",
     action="store_true",
-    help="Execute the algorithm locally using QASM simulator with extended_stabilizer method",
+    help="Execute the algorithm locally using QASM simulator with matrix_product_state method",
 )
-parser.add_argument("-b", "--backend", default="ibm_kyoto", help="IBM backend name")
+parser.add_argument("-b", "--backend", default="ibm_sherbrooke", help="IBM backend name")
 
 args = parser.parse_args()
 
