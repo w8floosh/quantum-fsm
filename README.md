@@ -30,15 +30,17 @@ The software will execute the algorithm in `SFSC` mode and on the `ibm_kyoto` ba
 The algorithm can search for fixed-length common prefixes (`FPM` problem), common substrings starting at a certain position (`FFP` problem) or common substrings starting at any position $j$ (`SFSC` problem) inside bitstrings which length is a power of 2. 
 The algorithms work only for fixed-lengths being powers of 2 and only support bitstrings as input.
 
-Due to the number of qubits involved even in easy cases of use, local simulation is not supported. The software can only be executed on real quantum machines or simulators with a high number (127+) of qubits.
-Furthermore, as of first release period, the algorithm won't work on IBM simulator backends because of a transpilation issue.
+The software works in local simulation for very small strings, due to the high number of qubits involved even in the easiest cases of use, but gives ambiguous results in real quantum machines as it is not optimized with error-correction algorithms.
 
 Every gate applied in the building phase (including the whole circuit) will be drawn through matplotlib and Graphviz and saved as an image in the current working directory.
 
 ## Performance
-Each of the algorithm modes uses exactly $2(n+1)\log_2{}d + (\frac{13}{2})n\log_2{}n = \mathcal{O}(n\log_2{}n)$ qubits, where $d$ is the fixed length of the substring to search and $n$ is the size of any of the input registers (their size must be equal and a power of 2).
 
-The maximum depth is $\mathcal{O}(\log_2^3{}n)$ as stated in the paper, but several tricks have been leveraged in order to reduce the depth and the computation time at the expense of the number of quantum lines, so that the quantum volume is $\mathcal{O}(n\log_2^4{}n)$ even with those improvements.
+Each of the algorithm modes uses exactly $2(n+1)\lfloor {\log_2{}d} \rfloor + 3n + 2  = \mathcal{O}(n\log_2{}d) \approx \mathcal{O}(n\log_2{}n)$ qubits, where $d$ is the fixed length of the substring to search and $n$ is the size of any of the input registers (their size must be equal and a power of 2).
+
+The maximum depth is $\mathcal{O}(\log_2^3{}n)$ as stated in the paper, but several tricks have been leveraged in order to reduce the depth and the computation time at the expense of the number of quantum lines, so that the quantum volume is approximately $\mathcal{O}(n\log_2^4{}n)$ even with those improvements.
+
+Furthermore, a recent optimization lowered the cyclic rotation cost from \mathcal{O}(\log_2{}n) to constant time.
 
 These algorithms are still under refining, as the current implementation of the full circuit does not give an actual result with acceptable error when running on real quantum machines.
 
